@@ -37,7 +37,8 @@ def apollo_post(endpoint, api_key, payload, retries=1):
     if resp.status_code == 429 and retries > 0:
         time.sleep(30)
         return apollo_post(endpoint, api_key, payload, retries=retries - 1)
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        raise ApolloError(f"HTTP {resp.status_code} from {endpoint}: {resp.text[:500]}")
     return resp.json()
 
 
@@ -114,7 +115,10 @@ def build_report_rows(companies_cache):
     rows = []
     for name, info in companies_cache.items():
         if not info.get("matched"):
-            rows.append([name, "", "", "", "", "", "No org match in Apollo"])
+            status = "No org match in Apollo"
+            if info.get("error"):
+                status = f"ERROR: {info['error']}"
+            rows.append([name, "", "", "", "", "", status])
             continue
         people = info.get("people", [])
         if not people:
