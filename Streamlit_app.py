@@ -45,24 +45,63 @@ target_titles = [t.strip() for t in titles_text.splitlines() if t.strip()]
 
 st.divider()
 
+# --------------------------------------------------------------- debug -----
+with st.expander("🔧 Debug: test a single company"):
+    test_name = st.text_input("Company name to test", value="")
+    if st.button("Test this one company", disabled=not (api_key and test_name)):
+        try:
+            result = core.match_company(test_name, api_key, target_titles)
+            st.json(result)
+        except Exception as e:
+            st.error(f"Raw error: {repr(e)}")
+            if hasattr(e, "response") and e.response is not None:
+                st.code(f"Status: {e.response.status_code}\nBody: {e.response.text[:1000]}")
+
+st.divider()
+
 # ------------------------------------------------------------- phase 1 -----
 st.subheader("2. Match companies (free — no credits spent)")
 
-if st.button("Run matching", disabled=not (api_key and xlsx_file)):
+col_a, col_b = st.columns([1, 1])
+with col_a:
+    run_matching = st.button("Run matching", disabled=not (api_key and xlsx_file))
+with col_b:
+    if st.button("Clear cache / start over"):
+        st.session_state.cache = {}
+        st.session_state.credits_used = 0
+        st.rerun()
+
+if run_matching:
     names = core.read_company_names(xlsx_file)
     progress = st.progress(0.0, text="Starting...")
     log = st.empty()
 
+    consecutive_errors = 0
     for i, name in enumerate(names, 1):
         if name in st.session_state.cache and st.session_state.cache[name].get("matched") is not None:
             continue
         try:
             result = core.match_company(name, api_key, target_titles)
+            consecutive_errors = 0
         except core.ApolloError as e:
-            st.error(str(e))
-            break
+            st.error(f"Apollo auth/plan error: {e}")
+            st.stop()
         except Exception as e:
             result = {"matched": False, "org_id": None, "people": [], "error": str(e)}
+            consecutive_errors += 1
+            log.warning(f"Error on '{name}': {e}")
+            if consecutive_errors >= 5:
+                st.error(
+                    f"Stopped after 5 consecutive identical-looking failures. "
+                    f"Last error: {e}\n\n"
+                    f"This usually means every call is failing the same way "
+                    f"(wrong endpoint, plan doesn't include this API, or bad "
+                    f"request format) rather than genuine per-company misses. "
+                    f"Fix this before continuing — re-running now will just "
+                    f"burn through the rest of the list with the same error."
+                )
+                st.session_state.cache[name] = result
+                break
         st.session_state.cache[name] = result
         progress.progress(i / len(names), text=f"{i}/{len(names)}: {name}")
         time.sleep(core.REQUEST_DELAY_SECONDS)
